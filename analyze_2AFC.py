@@ -33,14 +33,20 @@ import pandas as pd
 
 from EEG import EEGsession as EEG
 
-subjects = ['27']
+subjects = ['30']
 ids = [0] 
-tasks = ['attend']
+tasks = ['loc']
 dataDir = '/Users/stijnnuiten/Documents/UvA/Data/perception/'
+bads = {'30_0_loc':[]}
+event_ids = {'loc':	{"stim/present/left/vert": 3848, "stim/present/left/horz": 3849, 
+						"stim/present/right/vert": 3850, "stim/present/right/horz": 3851, 
+						"stim/absent": 3852, "choice/present": 3856, "choice/absent": 3857}
+						}
 
 if __name__ == '__main__':
 	eeg = EEG(dataDir=dataDir)
 	for t in tasks:
 		for i in ids:
 			for subj in subjects:
-				eeg.prep(subject=subj, index=i,  task = t,bad_chans=[])
+				ID = subj+'_'+str(i)+'_'+t
+				eeg.prep(ID=ID,bad_chans=bads[ID],event_ids=event_ids[t])

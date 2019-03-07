@@ -56,14 +56,12 @@ class EEGsession(object):
 		self.chanSel['OCC'] = ['Oz','O1','O2', 'PO7', 'PO3', 'POz', 'PO4', 'PO8', 'Iz']
 		# self.chanSel['']
 
-	def prep(self,subject, index, task,**kwargs):
+	def prep(self,ID,**kwargs):
 		# this method loads all necesary files and pre-defines some settings
-		self.task = task
-		self.subject = subject
-		self.index = index
-		self.ID = self.subject + '_' + str(self.index) + '_' + self.task
+		self.ID = ID
+		self.subject,self.index,self.task  = self.ID.split('_')
+
 		self.eeg_filename = glob.glob(os.path.join(self.dataDir, self.task + '/' , self.subject + '/',  self.subject + '_' + str(self.index) + '*.bdf'))[-1]
-		
 		if kwargs is not None:
 			for argument in ['bad_chans','event_ids']:
 				value = kwargs.pop(argument, 0)
@@ -98,26 +96,29 @@ class EEGsession(object):
 		# Center to cover the whole blink with full duration of 0.5s:
 		onset = eog_events[:, 0] / self.raw.info['sfreq'] - 0.25
 		duration = np.repeat(0.5, n_blinks)
-		annotations = mne.Annotations(onset, duration, ['bad blink'] * n_blinks,
+		self.raw.annotations = mne.Annotations(onset, duration, ['bad blink'] * n_blinks,
                                   orig_time=self.raw.info['meas_date'])
 		# self.raw.set_annotations(annotations)
 		picks_eeg = mne.pick_types(self.raw.info, meg=False, eeg=True, eog=True,
                        stim=False)
 		# self.raw.		
 		# self.raw.copy().drop_channels(self.raw.copy().info['bads'] )
-		self.raw.info['bads'] = self.bad_chans
-		self.raw.interpolate_bads(reset_bads=True)
+		self.raw.info['bads'] = self.bad_chans 
+		if len(self.raw.info['bads']) > 0:
+			self.raw.interpolate_bads(reset_bads=True) 
 		self.events = mne.find_events(self.raw)
 
 		for ev in range(1,self.events.shape[0]): # Remove any events with weirdly short intervals (in the merged data-files, this happens at the "zip"-location)
 			if self.events[ev,0] - self.events[ev-1,0] < 50:
 				self.events[ev,2] = 0
 
-		self.epochs = mne.Epochs(self.raw, self.events, event_id=self.event_ids, preload=True, tmin = -1.00, tmax = 2.0, baseline = (-0.200,0), picks=picks_eeg)
+		self.epochs = mne.Epochs(self.raw, self.events, event_id=self.event_ids,
+			 preload=True, tmin = -1.00, tmax = 2.0, baseline = (-0.200,0), 
+			 picks=picks_eeg, reject_by_annotation=True)
+		
 		ica = ICA(n_components=25, method='fastica')
 		ica.fit(self.epochs.copy(),decim=4)
 		bad_idx, scores = ica.find_bads_eog(self.epochs, ch_name = 'VU', threshold=2)
 		ica.apply(self.epochs, exclude=bad_idx)
 		self.epochs.save(self.eeg_filename[:-4]+'_epo.fif')
-
 
