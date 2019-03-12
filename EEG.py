@@ -56,26 +56,31 @@ class EEGsession(object):
 		self.chanSel['OCC'] = ['Oz','O1','O2', 'PO7', 'PO3', 'POz', 'PO4', 'PO8', 'Iz']
 		# self.chanSel['']
 
-	def prep(self,ID,**kwargs):
+	def prep(self,ID,preproc=False,**kwargs):
 		# this method loads all necesary files and pre-defines some settings
 		self.ID = ID
 		self.subject,self.index,self.task  = self.ID.split('_')
 
+		self.plotDir =  os.path.join(self.dataDir,'figs',self.task,'eeg/indiv',self.subject) 
+		if not os.path.isdir(self.plotDir):
+			os.makedirs(self.plotDir)	
 		self.eeg_filename = glob.glob(os.path.join(self.dataDir, self.task + '/' , self.subject + '/',  self.subject + '_' + str(self.index) + '*.bdf'))[-1]
 		if kwargs is not None:
 			for argument in ['bad_chans','event_ids']:
 				value = kwargs.pop(argument, 0)
 				setattr(self, argument, value)
-
-		try:
-			self.epochFilename = glob.glob(os.path.join(self.dataDir, self.task + '/' ,self.subject + '/',  self.subject + '_' + str(self.index) + '_' + self.task +'_epo.fif'))[-1]	
-			self.epochs =  mne.read_epochs(self.epochFilename, preload=True)
-			print "epoch files found and loaded"
-		except:
-			self.raw =  mne.io.read_raw_edf(self.eeg_filename, eog = ['HL','HR','VU','VD'],
-				misc = ['M1','M2'], preload=True)
-			print "Epoch-file not found, continueing pre-processing"
+		if preproc:
 			self.preproc()
+		else:			
+			try:
+				self.epochFilename = glob.glob(os.path.join(self.dataDir, self.task + '/' ,self.subject + '/',  self.subject + '_' + str(self.index) + '_' + self.task +'_epo.fif'))[-1]	
+				self.epochs =  mne.read_epochs(self.epochFilename, preload=True)
+				print "epoch files found and loaded"
+			except:
+				self.raw =  mne.io.read_raw_edf(self.eeg_filename, eog = ['HL','HR','VU','VD'],
+					misc = ['M1','M2'], preload=True)
+				print "Epoch-file not found, continueing pre-processing"
+				self.preproc()
 	
 	def preproc(self):
 		""" This method runs all the necessary pre-processing steps on the raw EEG-data. 
@@ -101,8 +106,7 @@ class EEGsession(object):
 		# self.raw.set_annotations(annotations)
 		picks_eeg = mne.pick_types(self.raw.info, meg=False, eeg=True, eog=True,
                        stim=False)
-		# self.raw.		
-		# self.raw.copy().drop_channels(self.raw.copy().info['bads'] )
+
 		self.raw.info['bads'] = self.bad_chans 
 		if len(self.raw.info['bads']) > 0:
 			self.raw.interpolate_bads(reset_bads=True) 
@@ -121,4 +125,52 @@ class EEGsession(object):
 		bad_idx, scores = ica.find_bads_eog(self.epochs, ch_name = 'VU', threshold=2)
 		ica.apply(self.epochs, exclude=bad_idx)
 		self.epochs.save(self.eeg_filename[:-4]+'_epo.fif')
+
+	def erp(self,conds,**kwargs):
+		self.conds=conds
+		if kwargs.items():
+			for argument in ['chan']:
+				value = kwargs.pop(argument, 0)
+				setattr(self, argument, value)
+		cond1 = self.epochs[self.conds[0]]
+		cond2 = self.epochs[self.conds[1]]
+
+		colors = 'blue', 'red'
+		evokeds = [self.epochs[name].average() for name in (conds)]
+		evokeds[0].comment, evokeds[1].comment = conds
+
+		if hasattr(self,'chan'):
+			pick = evokeds[0].ch_names.index(self.chan)
+			mne.viz.plot_compare_evokeds(evokeds, picks=pick, colors=colors)
+
+		else:
+			# evokeds = [self.epochs[name].average() for name in (conds)]
+			evokeds[0].comment, evokeds[1].comment = conds
+
+			colors = 'blue', 'red'
+			title = conds[0] + 'vs. ' + conds[1]
+			evokeds[0].detrend(order=1)
+			evokeds[1].detrend(order=1)	
+			evokeds.append(mne.combine_evoked(evokeds, weights=[-1,1]))
+			maxes = np.array([np.max(evokeds[i].data) for i in range(len(evokeds))])
+			mins = np.array([np.min(evokeds[i].data) for i in range(len(evokeds))])
+			vmax = np.max([abs(maxes), abs(mins)])*1000000
+			vmin = -vmax
+			# plot_evoked_topo(axes=ax[0,0],evoked=evokeds, color=colors, title=title, background_color='w',show=False)
+			plotkwargs = dict(ch_type='eeg', time_unit='s',show=False)
+			fig,ax = plt.subplots(3,6, figsize = (6,6))
+			evokeds[2].plot_topomap(vmin=vmin,vmax=vmax,axes=ax[2,:ax.shape[1]-1],times='peaks',colorbar=True,**plotkwargs)
+			peaks = [float(str(ax[2][i].title)[-9:-4]) for i in range(ax.shape[1]-1)]
+			h2=evokeds[0].plot_topomap(vmin=vmin,vmax=vmax,axes=ax[0,:ax.shape[1]-1],times=peaks,colorbar=False,**plotkwargs)
+			h3=evokeds[1].plot_topomap(vmin=vmin,vmax=vmax,axes=ax[1,:ax.shape[1]-1],times=peaks,colorbar=False,**plotkwargs)
+			ax[2,0].set_ylabel('difference',fontsize=14,fontweight='bold')
+			ax[0,0].set_ylabel(self.conds[0],fontsize=14,fontweight='bold')
+			ax[1,0].set_ylabel(self.conds[1],fontsize=14,fontweight='bold')
+			matplotlib.pyplot.subplots_adjust(left=0.05,right=0.9)
+			plt.savefig(fname=os.path.join(self.plotDir,conds[0].split('/')[1] + ' vs. ' + conds[1].split('/')[1] + '.pdf'),format='pdf')			# ax[2,0].set_suptitle('Condition difference')
+
+
+
+
+
 
