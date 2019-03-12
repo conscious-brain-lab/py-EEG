@@ -50,4 +50,4 @@ if __name__ == '__main__':
 			for subj in subjects:
 				ID = subj+'_'+str(i)+'_'+t
 				eeg.prep(ID=ID,bad_chans=bads[ID],event_ids=event_ids[t])
-				eeg.erp(conds = ["stim/present","stim/absent"])
+				eeg.erp(conds = ["stim/present","stim/absent"],chan=['Oz','Pz','PO3'],lims = [-0.2,1.0])

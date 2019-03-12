@@ -129,7 +129,7 @@ class EEGsession(object):
 	def erp(self,conds,**kwargs):
 		self.conds=conds
 		if kwargs.items():
-			for argument in ['chan']:
+			for argument in ['chan','lims']:
 				value = kwargs.pop(argument, 0)
 				setattr(self, argument, value)
 		cond1 = self.epochs[self.conds[0]]
@@ -140,9 +140,13 @@ class EEGsession(object):
 		evokeds[0].comment, evokeds[1].comment = conds
 
 		if hasattr(self,'chan'):
-			pick = evokeds[0].ch_names.index(self.chan)
-			mne.viz.plot_compare_evokeds(evokeds, picks=pick, colors=colors)
-
+			for c in range(len(self.chan)):
+				pick = evokeds[0].ch_names.index(self.chan[c])
+				edi = {conds[0]: evokeds[0], conds[1]: evokeds[1]}
+				mne.viz.plot_compare_evokeds(edi, picks=pick, colors=colors, show=False,show_legend=True)
+				mne.viz.tight_layout()
+				plt.savefig(fname=os.path.join(self.plotDir,conds[0].split('/')[1] + ' vs. ' + conds[1].split('/')[1] + '_' + self.chan[c] + '.pdf'),format='pdf')			# ax[2,0].set_suptitle('Condition difference')
+		
 		else:
 			# evokeds = [self.epochs[name].average() for name in (conds)]
 			evokeds[0].comment, evokeds[1].comment = conds
