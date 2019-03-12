@@ -36,18 +36,12 @@ import mne
 import matplotlib.pyplot as plt
 from mne.time_frequency import tfr_morlet
 from mne import io, EvokedArray
-from mne.datasets import sample
-from mne.decoding import Vectorizer, get_coef
 from mne.preprocessing import ICA
 from mne.preprocessing import create_eog_epochs, create_ecg_epochs
 from mne.viz import plot_evoked_topo
 
 from mne.stats import spatio_temporal_cluster_test
 
-
-from mne.decoding import (SlidingEstimator, GeneralizingEstimator,
-                          cross_val_multiscore, LinearModel, get_coef, CSP)
-from mne.filter import filter_data
 
 class EEGsession(object):
 	def __init__(self, dataDir):
