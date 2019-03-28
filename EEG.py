@@ -48,7 +48,6 @@ class EEGsession(object):
 		self.dataDir = dataDir
 		self.chanSel = {}
 		self.chanSel['OCC'] = ['Oz','O1','O2', 'PO7', 'PO3', 'POz', 'PO4', 'PO8', 'Iz']
-		# self.chanSel['']
 
 	def prep(self,ID,preproc=False,**kwargs):
 		# this method loads all necesary files and pre-defines some settings
@@ -167,7 +166,41 @@ class EEGsession(object):
 			matplotlib.pyplot.subplots_adjust(left=0.05,right=0.9)
 			plt.savefig(fname=os.path.join(self.plotDir,conds[0].split('/')[1] + ' vs. ' + conds[1].split('/')[1] + '.pdf'),format='pdf')			# ax[2,0].set_suptitle('Condition difference')
 
+	def TFdecomp(self,method,freqs,**kwargs):
+		# For now only does Morlet-wavelet + multitaper decomposition
 
+		# extract possible arguments
+		if kwargs.items():
+			for argument in ['baseline_lim','baseline_method','lims','fft','itc','average']:
+				value = kwargs.pop(argument, False)
+				setattr(self, argument, value)
+			for argument in ['decim','bandwidth']:
+				value = kwargs.pop(argument, 1)
+				setattr(self, argument, value)				
+				
+		# first create h5-filename for time-frequency data
+		tf_filename = self.epochFilename.split('/')[-1][:-4] + '-tfr.h5'
+
+		# Number of cycles dependent on frequency-band
+		n_cycles = freqs/2.
+
+		# Run tf-decomposition
+		if method == 'morlet':
+			self.tf = tfr_morlet(self.epochs, freqs, n_cycles = n_cycles,decim=self.decim, use_fft=self.fft, return_itc=self.itc, average = self.average)
+		elif method == 'multitaper':
+			self.bandwidth = self.bandwidth if self.bandwidth > 2 else 4
+			self.tf = tfr_multitaper(self.epochs, freqs, time_bandwith=self.bandwidth, n_cycles = n_cycles,decim=self.decim, use_fft=self.fft, return_itc=self.itc, average = self.average)
+
+		# baseline if necesarry
+		if self.baseline_lim:
+			self.tf = self.tf.apply_baseline(mode=self.baseline_method, baseline=self.baseline_lim)
+
+		# Crop if necessary
+		if self.lims:
+			self.tf.crop(tmin=self.lims[0],tmax=self.lims[1])
+
+		# Save tfr-epoch file
+		self.tf.save('/'+'/'.join(self.epochFilename.split('/')[1:-1])+'/'+tf_filename, overwrite=True)
 
 
 
