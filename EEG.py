@@ -42,10 +42,12 @@ from mne.viz import plot_evoked_topo
 
 from mne.stats import spatio_temporal_cluster_test
 
+from functions.statsfuncs import cluster_ttest
+
 
 class EEGsession(object):
-	def __init__(self, dataDir):
-		self.dataDir = dataDir
+	def __init__(self, baseDir):
+		self.baseDir = baseDir
 		self.chanSel = {}
 		self.chanSel['OCC'] = ['Oz','O1','O2', 'PO7', 'PO3', 'POz', 'PO4', 'PO8', 'Iz']
 
@@ -54,10 +56,10 @@ class EEGsession(object):
 		self.ID = ID
 		self.subject,self.index,self.task  = self.ID.split('_')
 
-		self.plotDir =  os.path.join(self.dataDir,'figs',self.task,'eeg/indiv',self.subject) 
+		self.plotDir =  os.path.join(self.baseDir,'figs',self.task,'eeg/indiv',self.subject) 
 		if not os.path.isdir(self.plotDir):
 			os.makedirs(self.plotDir)	
-		self.eeg_filename = glob.glob(os.path.join(self.dataDir, self.task + '/' , self.subject + '/',  self.subject + '_' + str(self.index) + '*.bdf'))[-1]
+		self.eeg_filename = glob.glob(os.path.join(self.baseDir, self.task + '/' , self.subject + '/',  self.subject + '_' + str(self.index) + '*.bdf'))[-1]
 		if kwargs is not None:
 			for argument in ['bad_chans','event_ids']:
 				value = kwargs.pop(argument, 0)
@@ -66,7 +68,7 @@ class EEGsession(object):
 			self.preproc()
 		else:			
 			try:
-				self.epochFilename = glob.glob(os.path.join(self.dataDir, self.task + '/' ,self.subject + '/',  self.subject + '_' + str(self.index) + '_' + self.task +'_epo.fif'))[-1]	
+				self.epochFilename = glob.glob(os.path.join(self.baseDir, self.task + '/' ,self.subject + '/',  self.subject + '_' + str(self.index) + '_' + self.task +'_epo.fif'))[-1]	
 				self.epochs =  mne.read_epochs(self.epochFilename, preload=True)
 				print "epoch files found and loaded"
 			except:
@@ -202,6 +204,58 @@ class EEGsession(object):
 		# Save tfr-epoch file
 		self.tf.save('/'+'/'.join(self.epochFilename.split('/')[1:-1])+'/'+tf_filename, overwrite=True)
 
+		# Since exact event ids are not saved in tfr-epoch file, create separate pd Series with event numbers per tfr-epoch
+		events = pd.Series(self.epochs.events[:,2])
+		events.to_csv('/'+'/'.join(self.epochFilename.split('/')[1:-1])+'/'+tf_filename[:-3] + '.csv')
 
+	def extractTFRevents(self,event_ids,ID,average=True):
+		subject,index,task  = ID.split('_')
+		tf_filename = self.baseDir + task + '/' + ID.split('_')[0] + '/' + ID + '_epo-tfr.h5'
+		# +'/'.join(self.epochFilename.split('/')[1:-1])+'/' + self.epochFilename.split('/')[-1][:-4] + '-tfr.h5'
+		tfEvent_filename = tf_filename[:-3] + '.csv'
+		tf = mne.time_frequency.read_tfrs(tf_filename)[0]
+		events=pd.read_csv(tfEvent_filename,usecols=[1],header=None)
+
+		chans, freqs, times = tf.ch_names, tf.freqs, tf.times
+		tfr={}
+		for ev in event_ids.keys():
+			tfr[ev] = tf.data[events[1].isin(event_ids[ev]),:,:,:]
+			if average:
+				tfr[ev] = np.mean(tfr[ev],axis=0)		
+		return tfr, chans, freqs, times
+
+
+	def groupTF(self,task,idx,event_ids,subs,chanSel,normalize=True,bl = [-0.2,0]):
+		plotDir = self.baseDir + 'figs/' + task + '/eeg/group/'
+		if not os.path.isdir(plotDir):
+			os.mkdirs(plotDir)	
+
+		tfrAll = []
+		for s in subs:
+			ID = s + '_' + str(idx) + '_' + task 
+			[dat,chans,freqs,times] = self.extractTFRevents(event_ids,ID)
+			tfrAll.append(dat)
+
+		picks = [chans.index(c) for c in self.chanSel[chanSel] ]
+		cond1 = np.array([tfrAll[s][event_ids.keys()[0]][picks,:,:].mean(axis=0) for s in range(len(subs))])
+		cond2 = np.array([tfrAll[s][event_ids.keys()[1]][picks,:,:].mean(axis=0) for s in range(len(subs))])
+		
+		if normalize: # for now only dB
+			blTimes = np.logical_and(times>bl[0],times<bl[1])
+			cond1 = np.array([10 * np.log10(cond1[s,f,:]/cond1[s,f,blTimes].mean()) for s in range(len(subs)) for f in range(len(freqs)) ]).reshape(len(subs),len(freqs),len(times))
+			cond2 = np.array([10 * np.log10(cond2[s,f,:]/cond2[s,f,blTimes].mean()) for s in range(len(subs)) for f in range(len(freqs)) ]).reshape(len(subs),len(freqs),len(times))
+
+		condDiff = cond2-cond1
+		t_thresh = cluster_ttest(cond2,cond1,1000, 0.05)
+
+		diffMean = condDiff.mean(axis=0)
+		plt.imshow(diffMean,cmap = 'RdBu_r',origin = 'lower',vmin=-abs(diffMean).max(), vmax = abs(diffMean).max())
+		yticks(range(0,len(freqs),5), np.around(freqs[::5],decimals=1))
+		ylabel('Frequency (Hz)')
+		xticks(range(0,len(times),5), np.around(times[::5],decimals=1))
+		xlabel('Time (s)')
+		colorbar()
+		title(event_ids.keys()[1] + ' - ' + event_ids.keys()[0])
+		plt.savefig(fname=plotDir + event_ids.keys()[1] + ' vs ' + event_ids.keys()[0] + ' group TF.pdf', format='pdf')
 
 
