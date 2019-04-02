@@ -239,7 +239,7 @@ class MVPA(object):
 		self.task = task
 		self.conds = ['response','presence','orientation'] # 
 		self.ids = ids
-		# shell()
+
 		for c in range(len(self.conds)):
 			Mat = np.array([])
 			for s in subjects:
