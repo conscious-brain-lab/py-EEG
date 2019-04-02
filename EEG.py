@@ -34,6 +34,7 @@ import pandas as pd
 
 import mne
 import matplotlib.pyplot as plt
+import matplotlib.patches as patch
 from mne.time_frequency import tfr_morlet
 from mne import io, EvokedArray
 from mne.preprocessing import ICA
@@ -211,7 +212,6 @@ class EEGsession(object):
 	def extractTFRevents(self,event_ids,ID,average=True):
 		subject,index,task  = ID.split('_')
 		tf_filename = self.baseDir + task + '/' + ID.split('_')[0] + '/' + ID + '_epo-tfr.h5'
-		# +'/'.join(self.epochFilename.split('/')[1:-1])+'/' + self.epochFilename.split('/')[-1][:-4] + '-tfr.h5'
 		tfEvent_filename = tf_filename[:-3] + '.csv'
 		tf = mne.time_frequency.read_tfrs(tf_filename)[0]
 		events=pd.read_csv(tfEvent_filename,usecols=[1],header=None)
@@ -225,37 +225,52 @@ class EEGsession(object):
 		return tfr, chans, freqs, times
 
 
-	def groupTF(self,task,idx,event_ids,subs,chanSel,normalize=True,bl = [-0.2,0]):
+	def groupTF(self,task,idx,event_ids,subs,chanSel,normalize=True, bl=[-0.2,0]):
+		# This method loads in subject TF-data, extracts the relevant epoch-data,
+		# calculates condition differences (t-test) and plots results.
+
+		# Create figure folder
 		plotDir = self.baseDir + 'figs/' + task + '/eeg/group/'
 		if not os.path.isdir(plotDir):
 			os.mkdirs(plotDir)	
 
+		# Load in data (and average all trials belonging to one condition)
 		tfrAll = []
 		for s in subs:
 			ID = s + '_' + str(idx) + '_' + task 
-			[dat,chans,freqs,times] = self.extractTFRevents(event_ids,ID)
+			[dat,chans,freqs,times] = self.extractTFRevents(event_ids,ID,average=True)
 			tfrAll.append(dat)
 
+		# Select channels and extract relevant data per condition
 		picks = [chans.index(c) for c in self.chanSel[chanSel] ]
 		cond1 = np.array([tfrAll[s][event_ids.keys()[0]][picks,:,:].mean(axis=0) for s in range(len(subs))])
 		cond2 = np.array([tfrAll[s][event_ids.keys()[1]][picks,:,:].mean(axis=0) for s in range(len(subs))])
 		
+		# Normalize
 		if normalize: # for now only dB
 			blTimes = np.logical_and(times>bl[0],times<bl[1])
 			cond1 = np.array([10 * np.log10(cond1[s,f,:]/cond1[s,f,blTimes].mean()) for s in range(len(subs)) for f in range(len(freqs)) ]).reshape(len(subs),len(freqs),len(times))
 			cond2 = np.array([10 * np.log10(cond2[s,f,:]/cond2[s,f,blTimes].mean()) for s in range(len(subs)) for f in range(len(freqs)) ]).reshape(len(subs),len(freqs),len(times))
 
+		# Perform cluster-corrected t-test
 		condDiff = cond2-cond1
-		t_thresh = cluster_ttest(cond2,cond1,1000, 0.05)
-
 		diffMean = condDiff.mean(axis=0)
-		plt.imshow(diffMean,cmap = 'RdBu_r',origin = 'lower',vmin=-abs(diffMean).max(), vmax = abs(diffMean).max())
-		yticks(range(0,len(freqs),5), np.around(freqs[::5],decimals=1))
-		ylabel('Frequency (Hz)')
-		xticks(range(0,len(times),5), np.around(times[::5],decimals=1))
-		xlabel('Time (s)')
-		colorbar()
-		title(event_ids.keys()[1] + ' - ' + event_ids.keys()[0])
-		plt.savefig(fname=plotDir + event_ids.keys()[1] + ' vs ' + event_ids.keys()[0] + ' group TF.pdf', format='pdf')
+		t_thresh = cluster_ttest(cond2,cond1,1000, 0.05)
+		x = np.linspace(0,t_thresh.shape[1], t_thresh.shape[1]*100)
+		y = np.linspace(0,t_thresh.shape[0], t_thresh.shape[0]*100)
 
+		tzero = (np.abs(0-times)).argmin()
+
+		# plot
+		plt.imshow(diffMean,cmap = 'RdBu_r',origin = 'lower',vmin=-abs(diffMean).max(), vmax = abs(diffMean).max())
+		colorbar()
+		plt.contour(t_thresh,[0.5],colors='black',linestyles='solid',linewidths=[2],levels=1,origin='lower',extent=[0-0.5, x[:-1].max()-0.5,0-0.5, y[:-1].max()-0.5])
+
+		yticks(range(0,len(freqs),5), np.around(freqs[::5],decimals=1),fontsize=12,fontweight='light')
+		ylabel('Frequency (Hz)',fontsize=14,fontweight='bold')
+		xticks(range(tzero,len(times),5), np.around(times[tzero::5],decimals=1),fontsize=12,fontweight='bold')
+		xlabel('Time (s)',fontsize=14,fontweight='bold')
+		title(event_ids.keys()[1] + ' - ' + event_ids.keys()[0],fontsize=16,fontweight='bold')
+
+		plt.savefig(fname=plotDir + event_ids.keys()[1] + ' vs ' + event_ids.keys()[0] + ' group TF.pdf', format='pdf')
 
