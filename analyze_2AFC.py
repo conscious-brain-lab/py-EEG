@@ -31,7 +31,8 @@ from IPython import embed as shell
 
 import pandas as pd
 
-from EEG import EEGsession as EEG
+from EEG import * 
+from MVPA import *
 
 subjects = ['26','30']
 ids = [0] 
@@ -45,13 +46,19 @@ event_ids = {'loc':	{"stim/present/left/vert": 3848, "stim/present/left/horz": 3
 
 if __name__ == '__main__':
 	eeg = EEG(baseDir=baseDir)
+	mvpa = MVPA(baseDir=baseDir)
 	for t in tasks:
 		for i in ids:
-		 	# for subj in subjects:
-				# ID = subj+'_'+str(i)+'_'+t
+		 	for subj in subjects:
+				ID = subj+'_'+str(i)+'_'+t
 				# eeg.prep(ID=ID,bad_chans=bads[ID],event_ids=event_ids[t])
 				# eeg.erp(conds = ["stim/present","stim/absent"],chan=['Oz','Pz','PO3'],lims = [-0.2,1.0])
 				# eeg.TFdecomp(freqs = np.logspace(*np.log10([4, 35]), num=20), lims= [-0.2,1.0], baseline = [-0.2, 0.0], method='morlet', decim=50)
 				# eeg.extractTFRevents(event_ids={'present': [3848,38409,3850,3851],'absent':[3852]})
 
-			eeg.groupTF(task=t,idx=i,event_ids={'present': [3848,38409,3850,3851],'absent':[3852]},subs=subjects, chanSel='OCC')
+				mvpa.prep(ID=ID,event_ids={'stim/present': [3848,3849,3850,3851],'stim/absent':[3852]})
+				mvpa.SVM( method='tempGen',times=[-0.2, 1.0], decim=8, supra=False)
+
+			# GROUP ANALYSIS
+			# eeg.groupTF(task=t,idx=i,event_ids={'present': [3848,38409,3850,3851],'absent':[3852]},subs=subjects, chanSel='OCC')
+

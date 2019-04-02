@@ -46,7 +46,7 @@ from mne.stats import spatio_temporal_cluster_test
 from functions.statsfuncs import cluster_ttest
 
 
-class EEGsession(object):
+class EEG(object):
 	def __init__(self, baseDir):
 		self.baseDir = baseDir
 		self.chanSel = {}
