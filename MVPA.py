@@ -51,6 +51,7 @@ from sklearn.discriminant_analysis import _cov
 from mne.decoding import (SlidingEstimator, GeneralizingEstimator,
                           cross_val_multiscore, LinearModel, get_coef, CSP)
 from mne.filter import filter_data
+from functions.statsfuncs import *
 
 
 class MVPA(object):
@@ -89,7 +90,7 @@ class MVPA(object):
 		self.epochsClass2 =  self.epochsClass2.decimate(decim)
 
 		conds = self.event_ids.keys()
-		condname = conds[0] + ' vs. ' + conds[1]
+		condname = conds[0] + ' vs ' + conds[1]
 		if '/' in condname:
 			condname = condname.replace('/','-')
 
@@ -130,9 +131,10 @@ class MVPA(object):
 
 		scores = np.mean(scores, axis=0)
 		scoresSEM = np.std(scoresAll,axis=0)/np.sqrt(scoresAll.shape[0])
+
 		df = pd.DataFrame(data=scores)
-		
-		df.to_csv(os.path.join(self.decDir, self.subject + '_' + str(self.index) + '_SVM_' + method + '_' + condname + ' ' + self.selection + (' supra' * supra) +'.csv'))
+		df.insert(0,'times',self.epochsClass1.times) 
+		df.to_csv(os.path.join(self.decDir, self.subject + '_' + str(self.index) + '_SVM_' + method + '_' + condname + '_' + self.selection + (' supra' * supra) +'.csv'),index=False)
 
 		plotDir = os.path.join(self.baseDir, 'figs', self.task, 'decoding/indiv',self.subject)
 		if not os.path.isdir(plotDir):
@@ -150,7 +152,7 @@ class MVPA(object):
 			ax.axhline(0, color='k')
 			plt.colorbar(im, ax=ax)
 
-			plt.savefig(fname = os.path.join(plotDir, self.subject + '_' + str(self.index) + '_tempGen ' +  condname + ' ' + self.selection + (' supra' * supra) + '.pdf'),format= 'pdf')
+			plt.savefig(fname = os.path.join(plotDir, self.subject + '_' + str(self.index) + '_tempGen ' +  condname + '_' + self.selection + (' supra' * supra) + '.pdf'),format= 'pdf')
 			plt.close()
 
 		elif method == 'diag':		
@@ -163,114 +165,71 @@ class MVPA(object):
 			ax.legend()
 			ax.axvline(0., color='k', linestyle='--')
 			ax.set_title('Sensor space decoding ' + condname + ' ' + self.task)
-			plt.savefig(fname = os.path.join(plotDir, self.subject + '_' +  str(self.index) + '_SVM ' + condname + ' ' + self.selection + (' supra' * supra) + '.pdf'),format= 'pdf')
+			plt.savefig(fname = os.path.join(plotDir, self.subject + '_' +  str(self.index) + '_SVM ' + condname + '_' + self.selection + (' supra' * supra) + '.pdf'),format= 'pdf')
 			plt.close()
 
-	def modelLoc(self):
-		# For now, this method trains on localizer data and tests on discrim/detect data (creating a generalization matrix). 
-		# As an example, we will decode presence/absence of a grating (in discrimination: i.e. left vs right).
-		# Here, the decoding analysis runs over ALL trials (correct, miss, FA, CR).
-		svc = SVC(C=1, kernel='linear')
+	def groupLevel(self, subs, idx, task, method, cond ='*', supra = False, selection = 'ALL',**kwargs):	
+		Mat = np.array([])
+		for s in subs:
+			classDir = self.baseDir + task + '/' + s + '/decoding/'
+			filename = glob.glob(os.path.join(classDir, s + '_' + str(idx) + '_SVM_' + method + '_' + cond + '_' + selection + (' supra' * supra) + '.csv'))[-1]
+			dat = pd.read_csv(filename)
+			times = np.array(dat['times'])
 
-		clf = make_pipeline(StandardScaler(), svc) #LinearModel(LogisticRegression()))
-		time_decod = GeneralizingEstimator(clf, scoring='roc_auc', n_jobs=1)
-		self.stimEpochs = self.epochs["stim"].pick_types(eeg=True).decimate(16)			
-		if np.unique(self.stimEpochs.event_id.keys()).shape[0] > 2:
-			epochs =  [self.stimEpochs, self.stimEpochs['present']]
-		else:
-			epochs = [self.stimEpochs]
-
-		conds = ['presence', 'orientation']
-		for i in range(len(epochs)):
-			# Retrieve all data
-			if i == 0:
-				# y = 1* (epochs[i].events[:,2]< 3850) 
-				y = 1* (epochs[i].events[:,2]< max(epochs[i].events[:,2])) 
-
-			elif i == 1:
-				if int(self.subject) > 19 and self.task=='loc':
-					y = 1* (epochs[i].events[:,2]< 3850) & (epochs[i].events[:,2] != 3852) 
-				else:
-					y = 1* (epochs[i].events[:,2] < 3849)
-
-		# Drop all channels but EEG and downsample to 128Hz
-		if self.task == 'detect':
-			locEpochs = self.locEpochs["left","right","absent"].pick_types(eeg=True).decimate(16)
-		elif self.task == 'discrim':
-			locEpochs = self.locEpochs["left","right"].pick_types(eeg=True).decimate(16)
-
-		time_decod.fit(X=locEpochs.get_data(),
-			y= locEpochs.events[:,2]<max(locEpochs.events[:,2])) #== 3848
-		#1* (locEpochs.events[:,2]< 3850) & (locEpochs.events[:,2] != 3852) )
-		scores = time_decod.score(X=epochs.get_data(),
-						y=epochs.events[:,2]<max(epochs.events[:,2])  ) #== 3848
-
-		fig, ax = plt.subplots(1)
-		im = ax.matshow(scores, vmin=0.4, vmax=0.6, cmap='RdBu_r', origin='lower',
-		                extent=epochs.times[[0, -1, 0, -1]])
-		ax.axhline(0., color='k')
-		ax.axvline(0., color='k')
-		ax.xaxis.set_ticks_position('bottom')
-		ax.set_xlabel('Testing Time (s)')
-		ax.set_ylabel('Training Time (s)')
-		ax.set_title('Generalization across time and condition')
-		plt.colorbar(im, ax=ax)
-		plt.show()
-		# shell()
-		df = pd.DataFrame(data=scores)
-		df.to_csv(os.path.join(self.baseDir,self.task + '/' , self.subject + '/' , self.subject + '_' + str(self.index) +  '_loc_accuracies.csv'))
-		plt.savefig(fname = self.baseDir + 'figs/' +self.task + '/decoding/indiv/' + self.subject + '/' + self.subject + '_' + self.task + '_' +  str(self.index) + '_loc_crossdecode.pdf',format= 'pdf')
-			
-		scoresDiag = [scores[i][i] for i in range(len(scores))] 
-		# # Plot
-		fig, ax = plt.subplots()
-		ax.plot(epochs.times, scoresDiag, label='score')
-		# ax.fill_between(epochs.times, scores-scoresSEM,scores+scoresSEM,alpha=0.2)
-		ax.axhline(.5, color='k', linestyle='--', label='chance')
-		ax.set_xlabel('Times')
-		ax.set_ylabel('AUC')  # Area Under the Curve
-		ax.legend()
-		ax.axvline(.0, color='k', linestyle='-')
-		ax.set_title('Sensor space decoding ' + self.task)
-		plt.savefig(fname = self.baseDir + 'figs/' +self.task + '/decoding/indiv/' + self.subject + '/' + self.subject + '_' + self.task + '_loc_crossdecodeDiag.pdf',format= 'pdf')
-
-	def groupLevel(self, subjects, ids, task, supra = '', selection = 'ALL'):	
-		self.supra = supra
-		self.task = task
-		self.conds = ['response','presence','orientation'] # 
-		self.ids = ids
-
-		for c in range(len(self.conds)):
-			Mat = np.array([])
-			for s in subjects:
-				classDir = self.baseDir + self.task + '/' + s + '/decoding/'
-				dat = pd.read_csv(glob.glob(os.path.join(classDir, s+ '_' + str(self.ids) + '_SVM_' + self.conds[c] + '*' + selection + '_' + self.supra + '_*.csv'))[-1])
+			if method == 'diag':
 				Mat = np.append(Mat,dat.values[:,1])	
+			elif method == 'tempGen':
+				Mat = np.append(Mat,dat.values[:,1:])	
 
-			allDat = Mat.reshape(len(subjects),dat.shape[0])
+		if method == 'diag':
+			allDat = Mat.reshape(len(subs),dat.shape[0])
+		elif method == 'tempGen':
+			allDat = Mat.reshape(len(subs),dat.shape[0],dat.shape[0])
 
-			allDatMean = allDat.mean(axis=0)
-			allDatSEM = np.std(allDat,axis=0)/np.sqrt(allDat.shape[0])
-			pvals, pvalsGN = self.prevInference(data=allDat)
+		cond = filename.split('/')[-1].split('_')[-2] if cond == '*' else cond
 
-			times = linspace(-200,1200,allDat.shape[1])
-			plt.suptitle('Mean decoding performance (N=%i). %s %s' %(allDat.shape[0], selection, supra))
-			plt.subplot(len(self.conds),1,c+1)
+		chance = np.ones(allDat.shape)*0.5
+		allDatMean = allDat.mean(axis=0)
+		allDatSEM = np.std(allDat,axis=0)/np.sqrt(allDat.shape[0])
+		
+		# times = linspace(-200,1200,allDat.shape[1])
+		tzero = (np.abs(0-times)).argmin()
+		timelabels = list(linspace(tzero,len(times)-1,5,dtype=int))
+
+		if method == 'diag':
+			pvals, pvalsGN = prevInference(data=allDat)
+
+			plt.suptitle('Mean decoding performance (N=%i). %s %s' %(allDat.shape[0], selection + ' channels', ' supra' * supra ))
 			h1 = plt.plot(times,allDatMean)
 			h2 = plt.fill_between(times, allDatMean-allDatSEM,allDatMean+allDatSEM,alpha=0.5)
-
-			# plt.xticks(np.arange(-200,1400,200))
-			# if not self.conds[c] == 'orientation':
 			plt.ylim(0.4,1.1)
 			plt.yticks(np.arange(0.40,1.1, 0.10))
 				
 			plt.axhline(0.5, color='k',linestyle='-.')
 			plt.axvline(0., color='k')
-			# h3, = plt.plot(linspace(-200,1200,allDat.shape[1]),(pvals<0.05)*0.45 , 'ro', label='Majority Null')
-			h4, = plt.plot(linspace(-200,1200,allDat.shape[1]),(pvalsGN<0.05)*0.45 , 'go', label='Global Null')
+			h4 = plt.plot(linspace(times[0],times[-1],allDat.shape[1]),(pvalsGN<0.05)*0.45 , 'go', label='Global Null')
 			plt.legend(handles=[ h4], labels=['Global Null'])
-			plt.title(self.conds[c])
 
-		plt.subplots_adjust(hspace = 0.5)
-		plt.savefig(fname = self.baseDir + 'figs/'  + self.task + '/decoding/group/Decoding' + str(self.ids) + self.supra + '_' + selection + '.pdf',format= 'pdf')
+		elif method == 'tempGen':
+			t_thresh = cluster_ttest(chance,allDat,1000, 0.05)
+			x = np.linspace(0,t_thresh.shape[1], t_thresh.shape[1]*100)
+			y = np.linspace(0,t_thresh.shape[0], t_thresh.shape[0]*100)
+			plt.imshow(allDatMean,cmap = 'RdBu_r',origin = 'lower',vmin=0, vmax = 1)
+			cbar = colorbar()
+			cbar.set_ticks(arange(0,1.1,0.25))
+			cbar.ax.set_ylabel('AUC',fontsize=14,fontweight='bold',rotation='270',labelpad=20)
+			for l in cbar.ax.yaxis.get_ticklabels():
+   				l.set_weight("bold")
+   				l.set_size(12)
+
+			plt.contour(t_thresh,[0.5],colors='black',linestyles='solid',linewidths=[2],levels=1,origin='lower',extent=[0-0.5, x[:-1].max()-0.5,0-0.5, y[:-1].max()-0.5])
+			xticks(timelabels, np.around(times[timelabels],decimals=2),fontsize=12,fontweight='bold')
+			yticks(timelabels, np.around(times[timelabels],decimals=2),fontsize=12,fontweight='bold')
+			xlabel('Testing time (s)',fontsize=14,fontweight='bold')
+			ylabel('Training time (s)',fontsize=14,fontweight='bold')
+
+		plt.title(cond,fontsize=14,fontweight='bold')
+		plt.tight_layout()
+
+		plt.savefig(fname = self.baseDir + 'figs/'  + task + '/decoding/group/' + method + '_' + str(idx) + '_' + cond + (' supra' * supra) + '_' + selection + '.pdf',format= 'pdf')
 		plt.close()
