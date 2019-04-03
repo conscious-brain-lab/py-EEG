@@ -10,5 +10,8 @@ These scripts require the following Python modules (version numbers depicted are
 - MatPlotLib (2.2.2)
 - Pandas (0.20.3)
 - pickle (Revision: 72223)
+- sklearn (0.18.1)
+
+- Conscious Brain Lab functions
 
 
