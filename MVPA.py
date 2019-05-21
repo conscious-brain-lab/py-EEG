@@ -43,6 +43,7 @@ from mne.viz import plot_evoked_topo
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import ShuffleSplit
 from sklearn.svm import SVC  
@@ -55,26 +56,22 @@ from functions.statsfuncs import *
 
 
 class MVPA(object):
-	def __init__(self,baseDir):
+	def __init__(self,baseDir,ID,event_ids,baseline=None,balance=True,selection='ALL',condName='', dimension='timetime'):
 		self.baseDir = baseDir
-
-	def prep(self, ID,event_ids, selection = 'ALL'):
 		self.ID = ID
 		self.subject,self.index,self.task  = self.ID.split('_')
-		self.subDir = os.path.join(self.baseDir, self.task + '/' ,self.subject + '/')
+		self.subDir = os.path.join(self.baseDir,'Proc',self.task + '/' ,self.subject + '/')
 		self.event_ids = event_ids
-		print self.ID
+		self.selection = selection
+		self.baseline = baseline
+		self.balance = balance
+		self.condName = condName
+		self.dimension = dimension
 
-		# find epoch file and load epochs
-		self.epochFilename = glob.glob(os.path.join(self.subDir, '*' + str(self.index) + '*_epo.fif'))[-1]
-		self.epochs =  mne.read_epochs(self.epochFilename, preload=True)
-
-		# load trial-parameter file
-		self.params = pd.read_csv(os.path.join(self.subDir, self.subject + '_' + str(self.index) + '_params.csv'))
 
 		# Channel selection pre-sets
 		self.chanSel = {}
-		self.chanSel['ALL'] = self.epochs.info['ch_names'][0:64]
+		self.chanSel['ALL'] = ''
 		self.chanSel['OCC'] = ['Oz','O1','O2', 'PO7', 'PO3', 'POz', 'PO4', 'PO8', 'Iz']
 		self.chanSel['PAR'] = ['P1', 'P3', 'P5', 'P7', 'Pz', 'P2', 'P4', 'P6', 'P8']
 		self.chanSel['FRO'] = ['Fp1', 'AF7', 'AF3', 'Fpz', 'Fp2', 'AF8', 'AF4', 'AFz', 'Fz']
@@ -83,107 +80,157 @@ class MVPA(object):
 		  					   'O1', 'Iz', 'Oz', 'POz', 'PO8', 'PO4', 'O2', 'PO9', 'PO10' ]
 		self.chanSel['CDA'] = ['P5', 'P6', 'P7', 'P8', 'PO7', 'PO8', 'O1', 'O2', 'PO9', 'PO10'];
 
-		# Pick the desired channels
-		self.epochs.pick_channels(self.chanSel[selection])
 
-		# split up all epochs according to stimulus class
-		self.epochsClass1 = self.epochs[event_ids.keys()[0]]
-		self.epochsClass2 = self.epochs[event_ids.keys()[1]]
- 
+		print (self.ID + ' ready to decode')
+		# load trial-parameter file
+		self.params = pd.read_csv(os.path.join(self.subDir, self.subject + '_' + str(self.index) + '_params.csv'))
+
+		# find epoch file and load epochs
+		if self.dimension == 'timetime':
+			self.epochFilename = glob.glob(os.path.join(self.subDir, '*' + str(self.index) + '*_epo.fif'))[-1]
+			self.epochs =  mne.read_epochs(self.epochFilename, preload=True)
+			self.epochs.pick_channels(self.chanSel[self.selection])
+			# split up all epochs according to stimulus class
+			self.epochsClass1 = self.epochs[event_ids.keys()[0]]
+			self.epochsClass2 = self.epochs[event_ids.keys()[1]]
+
+			# If baseline = None, nothing will happen here
+			self.epochsClass1.apply_baseline(baseline)
+			self.epochsClass2.apply_baseline(baseline)
+		
+		if self.dimension == 'timefrequency':
+			self.paramsFile = glob.glob(os.path.join(self.subDir, '*' + str(self.index) + '*_epo-tfr.csv'))[-1]
+			self.params =np.array(pd.read_csv(self.paramsFile,header=None))[:,1]
+
+			cond1, cond2 = self.event_ids.items() 
+			class1ids = np.logical_or(self.params==cond1[1][0],self.params==cond1[1][1])   
+			class2ids = np.logical_or(self.params==cond2[1][0],self.params==cond2[1][1])   
+
+			self.epochFilename = glob.glob(os.path.join(self.subDir, '*' + str(self.index) + '*_epo-tfr.h5'))[-1]
+			self.epochs = mne.time_frequency.read_tfrs(self.epochFilename)[0]
+			if self.selection != 'ALL':
+				self.epochs.pick_channels(self.chanSel[self.selection])			
+
+			self.epochsClass1 = self.epochs[class1ids]
+			self.epochsClass2 = self.epochs[class2ids]
+
  		# create output directory, if necessaru
 		self.decDir = os.path.join(self.subDir + 'decoding/')
 		if not os.path.isdir(self.decDir):
-			os.mkdir(self.decDir)
+			os.makekdirs(self.decDir)
 
-	def SVM(self, method, times=[-0.2, 1.0], decim=8, supra=False):
+	def SVM(self, method, crossclass=False, times=[-0.2, 1.0], decim=8, supra=False):
 		# This method trains a support vector machine on 90% of the trials to separate conditions 
 		# (2 as of now), and then tests this model on the remaining 10%. This is done in a 10-fold procedure.
 		# Right now, only this procedure -and calculating auc values- are included.
+		
+		nSplits = 10
 
-		# crop data if desired
-		self.epochsClass1.crop(times[0],times[1])
-		self.epochsClass2.crop(times[0],times[1])
+		self.epochsClass1.crop(times[0],times[1])		# crop data if desired
+		self.epochsClass2.crop(times[0],times[1])		# crop data if desired
 
 		# decimate the signal to speed up, if desired
-		self.epochsClass1 =  self.epochsClass1.decimate(decim)
-		self.epochsClass2 =  self.epochsClass2.decimate(decim)
+		if self.dimension == 'timetime':
+			self.epochsClass1 =  self.epochsClass1.decimate(decim)
+			self.epochsClass2 =  self.epochsClass2.decimate(decim)
+			freqs = np.array([0])
+		else:
+			freqs = range(self.epochsClass1.data.shape[2])
 
-		# determine condition names
-		conds = self.event_ids.keys()
-		condname = conds[0] + ' vs ' + conds[1]
-		if '/' in condname:
-			condname = condname.replace('/','-') # replace '/' with '-' to prevent creating subfolders during saving of data/figures
+		cond1, cond2 = self.event_ids.keys() # determine condition names
+		# condname = cond1 + ' vs ' + cond2
+		if '/' in self.condName:
+			self.condName = self.condName.replace('/','-') # replace '/' with '-' to prevent creating subfolders during saving of data/figures
 
-		# give epochs labels (0: cond1, 1: cond2)
-		y = np.hstack([np.zeros(len(self.epochsClass1),dtype='bool'), np.ones(len(self.epochsClass2),dtype ='bool')])
-		# concatenate data belonging to both conds
-		X = np.concatenate([self.epochsClass1.get_data(), self.epochsClass2.get_data()])
+		chance = 1.0/len(self.event_ids.keys())  			# Determine chance level
+
+		if supra: # average over X-trials (now only 4), to reduce noise and increase decoding accuracy, if desired
+			# Find data belonging to present vs absent
+			Class1ShuffledOrder = np.argsort(np.random.rand(len(self.epochsClass1)))
+			Class2ShuffledOrder = np.argsort(np.random.rand(len(self.epochsClass2)))
 
 		# initiate the SVM
-		svc = SVC(C=1, kernel='linear')
-		clf = make_pipeline(StandardScaler(), svc)
-		cv  = ShuffleSplit(n_splits=10, test_size=0.1)
+		if method == 'svc':
+			dec = SVC(C=1, kernel='linear')
+		elif method =='lda':
+			dec = LinearDiscriminantAnalysis()
+		elif method == 'logreg':
+			dec = LogisticRegression(solver='lbfgs')
 
+		clf = make_pipeline(StandardScaler(), dec)
+		cv  = ShuffleSplit(n_splits=nSplits, test_size=0.1)
 		# time_decod is for diagonal decoding, time_gen for temporal generalization (incl. off-diagonal)
 		time_decod = SlidingEstimator(clf, n_jobs=1, scoring='roc_auc')
 		time_gen = GeneralizingEstimator(clf, n_jobs=1, scoring='roc_auc')
 
-		# Determine chance level
-		chance = 1.0/len(conds) 
+		scores = []
+		for f in range(len(freqs)):
+			# concatenate data belonging to both conds
+			cond1Dat = self.epochsClass1.get_data()[:,:,:] if self.dimension == 'timetime' else self.epochsClass1.data[:,:,f,:]
+			cond2Dat = self.epochsClass2.get_data()[:,:,:] if self.dimension == 'timetime' else self.epochsClass2.data[:,:,f,:]
+			
+			if supra:
+				supTrial1Dat = np.ones((int(cond1Dat.shape[0]/4), cond1Dat.shape[1],cond1Dat.shape[2]))
+				supTrial2Dat = np.ones((int(cond2Dat.shape[0]/4), cond2Dat.shape[1],cond2Dat.shape[2]))
 
-		if supra: # average over X-trials (now only 4), to reduce noise and increase decoding accuracy, if desired
-			# Find data belonging to present vs absent
-			Class1TrialDat = X[~y,:,:]
-			Class2TrialDat  = X[y,:,:]
+				for j in list(range(int(Class1ShuffledOrder.shape[0]/4))):
+					supTrial1Dat[j,:,:] = mean(cond1Dat[Class1ShuffledOrder[4*j:4*j+1],:,:],axis=0) #).squeeze()
+					supTrial2Dat[j,:,:] = mean(cond2Dat[Class2ShuffledOrder[4*j:4*j+1],:,:],axis=0) #).squeeze()
 
-			# Create arrays of random trial orders
-			Class1ShuffledOrder = np.argsort(np.random.rand(len(Class1TrialDat)))
-			Class2ShuffledOrder  = np.argsort(np.random.rand(len(Class2TrialDat)))
+				cond1Dat = supTrial1Dat		
+				cond2Dat = supTrial2Dat
 
-			# loop over random order, in groups of 4, and average the data over those trials
-			Class1SupraDat = np.array([mean(Class1TrialDat[[Class1ShuffledOrder[4*j:4*(j+1)]],:,:], axis=1 ) for j in range(Class1ShuffledOrder.shape[0]/4)]).squeeze()
-			Class2SupraDat  = np.array([mean(Class2TrialDat[[Class2ShuffledOrder[4*k:4*(k+1)]],:,:], axis=1 ) for k in range(Class2ShuffledOrder.shape[0]/4)]).squeeze()
 
-			# now 
-			y = np.concatenate((np.ones(Class1SupraDat.shape[0]), np.zeros(Class2SupraDat.shape[0])), axis=0)
-			X = np.concatenate((Class1SupraDat, Class2SupraDat), axis=0)
+			y = np.hstack([np.zeros(len(cond1Dat),dtype='bool'), np.ones(len(cond2Dat),dtype ='bool')])
+			X = np.concatenate([cond1Dat,cond2Dat])
 
-		if method == 'tempGen':
-			scores = cross_val_multiscore(time_gen, X, y, cv=cv, n_jobs=1)
-		elif method == 'diag':	
-			scores = cross_val_multiscore(time_decod, X, y, cv=cv, n_jobs=1)
+
+
+			if crossclass:
+				scores.append(cross_val_multiscore(time_gen, X, y, cv=cv, n_jobs=1))
+			else:	
+				scores.append(cross_val_multiscore(time_decod, X, y, cv=cv, n_jobs=1))
 	
 		scoresAll = scores
 
 		# Calculate mean and SEM for plotting
-		scores = np.mean(scores, axis=0)
-		scoresSEM = np.std(scoresAll,axis=0)/np.sqrt(scoresAll.shape[0])
+		scores = np.mean(scores, axis=1)
+		scoresSEM = np.squeeze(np.std(scoresAll,axis=1)/np.sqrt(nSplits))
 
 		# store averaged scores in dataFrame and save
-		df = pd.DataFrame(data=scores)
+		df = pd.DataFrame(data=scores.transpose())
 		df.insert(0,'times',self.epochsClass1.times) 
-		df.to_csv(os.path.join(self.decDir, self.subject + '_' + str(self.index) + '_SVM_' + method + '_' + condname + '_' + self.selection + (' supra' * supra) +'.csv'),index=False)
+		df.to_csv(os.path.join(self.decDir, '_'.join((self.subject, str(self.index),method,self.condName  ,self.selection ,(' supra' * supra) +'.csv'))),index=False)
 
-		plotDir = os.path.join(self.baseDir, 'figs', self.task, 'decoding/indiv',self.subject)
+
+
+		plotDir = os.path.join('/'.join(self.baseDir.split('/')[:-2]), 'figs', self.task, 'decoding/indiv',self.subject)
 		if not os.path.isdir(plotDir):
-			os.mkdir(plotDir)
+			os.makedirs(plotDir)
 
 		# Plot
 		fig, ax = plt.subplots()
-		if method == 'tempGen':
+		if crossclass or self.dimension == 'timefrequency':
+			extent = self.epochsClass2.times[[0, -1, 0, -1]] if crossclass else np.hstack([self.epochsClass2.times[[0, -1]], freqs[0], freqs[-1]])
+			yAx = 'Training Time (s)' if crossclass else 'Frequency (Hz)'
+			tit = 'Temporal generalization ' + self.task if crossclass else 'Time-frequency decoding ' + self.condName			
 			im = ax.imshow(scores, interpolation='lanczos', origin='lower', cmap='RdBu_r',
-			               extent=self.epochsClass2.times[[0, -1, 0, -1]], vmin=0, vmax=1.0)
+			               extent=extent, vmin=0.3, vmax=0.7,  aspect='auto')
+			
+
 			ax.set_xlabel('Testing Time (s)')
-			ax.set_ylabel('Training Time (s)')
-			ax.set_title('Temporal generalization' + self.task)
+			ax.set_ylabel(yAx)
+			ax.set_title(tit)
 			ax.axvline(0, color='k')
-			ax.axhline(0, color='k')
+			if crossclass:
+				ax.axhline(0, color='k')
+
 			plt.colorbar(im, ax=ax)
 
-			plt.savefig(fname = os.path.join(plotDir, self.subject + '_' + str(self.index) + '_SVM_' + method +  condname + '_' + self.selection + (' supra' * supra) + '.pdf'),format= 'pdf')
+			plt.savefig(fname = os.path.join(plotDir, '_'.join((self.subject, str(self.index) ,method,  self.condName ,  self.selection ,(' supra' * supra) + '.pdf'))),format= 'pdf')
 			plt.close()
 
-		elif method == 'diag':		
+		else:		
 			ax.plot(self.epochsClass2.times, scores, label='score')
 			ax.fill_between(self.epochsClass2.times, scores-scoresSEM,scores+scoresSEM,alpha=0.2)
 			ax.axhline(chance, color='k', linestyle='-', label='chance')
@@ -193,7 +240,7 @@ class MVPA(object):
 			ax.legend()
 			ax.axvline(0., color='k', linestyle='--')
 			ax.set_title('Sensor space decoding ' + condname + ' ' + self.task)
-			plt.savefig(fname = os.path.join(plotDir, self.subject + '_' +  str(self.index) + '_SVM_' + method + '_'+ condname + '_' + self.selection + (' supra' * supra) + '.pdf'),format= 'pdf')
+			plt.savefig(fname = os.path.join(plotDir, '_'.join((self.subject, str(self.index) ,method,  self.condName ,  self.selection ,(' supra' * supra) + '.pdf'))),format= 'pdf')
 			plt.close()
 
 	def groupLevel(self, subs, idx, task, method, cond ='*', supra = False, selection = 'ALL',**kwargs):	
