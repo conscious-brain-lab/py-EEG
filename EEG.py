@@ -67,7 +67,11 @@ class EEG(object):
         self.ID = ID
         if self.ID != None:
             self.subject,self.index,self.task  = self.ID.split('_')
- 
+
+            self.procDir = os.path.join(self.baseDir, 'Proc', self.task, self.subject)
+            if not os.path.isdir(self.procDir):
+                os.makedirs(self.procDir)
+            
             self.plotDir =  os.path.join(self.baseDir,'figs','indiv',self.subject)
             if not os.path.isdir(self.plotDir):
                 os.makedirs(self.plotDir) 
@@ -81,7 +85,7 @@ class EEG(object):
                 pass
 
             try:
-                self.epochFilename = glob.glob(os.path.join(self.baseDir, 'Proc', self.task, self.subject, '*' + self.subject + '*' + str(self.index) + '*_epo.fif'))[-1]                    
+                self.epochFilename = glob.glob(os.path.join(self.baseDir, 'Proc', self.task, self.subject,  self.subject + '*' + str(self.index) + '*_epo.fif'))[-1]                    
                 self.epochs =  mne.read_epochs(self.epochFilename, preload=True)
                 print( "epoch files found and loaded")
             except:
@@ -94,7 +98,7 @@ class EEG(object):
                 os.makedirs(self.plotDir) 
 
     
-    def preproc(self, baseline=None, epochTime=(-1.0, 2.0), ica=True, reject=None, reject_by_annotation=False):
+    def preproc(self, baseline=None, epochTime=(-1.0, 2.0), ica=True, reject=None, reject_by_annotation=False,overwrite=True):
         """ This method runs all the necessary pre-processing steps on the raw EEG-data. 
             Included are:
             - re-referencing
@@ -102,6 +106,7 @@ class EEG(object):
             - creating epochs 
             - ICA (+ selection and removal)
         """
+
         self.raw.set_montage(mne.channels.read_montage('biosemi64'))
         self.raw.set_eeg_reference(ref_channels = ['M1','M2'], projection=False)
         self.raw.drop_channels(['ECD','ECU'])
@@ -140,8 +145,9 @@ class EEG(object):
             bad_idx, scores = ica.find_bads_eog(self.epochs, ch_name = 'VU', threshold=2)
             ica.apply(self.epochs, exclude=bad_idx)
 
+
         self.epochFilename = os.path.join(self.baseDir, 'Proc', self.task, self.subject, self.subject + '_' + str(self.index) + '_epo.fif')
-        self.epochs.save(self.eegFilename[:-4]+'_epo.fif')
+        self.epochs.save(self.epochFilename,overwrite=overwrite)
 
     def erp(self,conds,**kwargs):
         self.conds=conds
@@ -192,7 +198,6 @@ class EEG(object):
 
     def TFdecomp(self,method,freqs,**kwargs):
         # For now only does Morlet-wavelet + multitaper decomposition
-        # shell()
         # extract possible arguments
         if kwargs.items():
             for argument in ['baseline_lim','baseline_method','lims','fft','itc','average']:
@@ -210,10 +215,8 @@ class EEG(object):
 
         # Number of cycles dependent on frequency-band
         n_cycles = freqs/2.
-        # shell()
         # Run tf-decomposition
         if method == 'morlet':
-            shell()
             self.tf = tfr_morlet(self.epochs, freqs, n_cycles = n_cycles,decim=self.decim, use_fft=self.fft, return_itc=self.itc, average = self.average,output=self.output)
         elif method == 'multitaper':
             self.bandwidth = self.bandwidth if self.bandwidth > 2 else 4
@@ -234,6 +237,19 @@ class EEG(object):
         self.events = pd.Series(self.epochs.events[:,2])
         self.events.to_csv('/'+'/'.join(self.epochFilename.split('/')[1:-1])+'/'+tf_filename[:-3] + '.csv')
 
+    def concatenateEpochs(self):
+        epochFiles = glob.glob(os.path.join(self.baseDir, 'Proc', self.task, self.subject, self.subject + '_' + '[!merged]*_epo.fixf'))                  
+        eps = []
+        for f in epochFiles:
+            eps.append(mne.read_epochs(f, preload=True))
+
+        mergedEps = mne.concatenate_epochs(eps)
+        filepath = '/'.join((f.split('/')[:-1]   ))
+        fileParts = f.split('/')[-1].split('_')         
+        fileParts[1] = 'merged'
+        newFilename = '_'.join((fileParts))
+        mergedFile = os.path.join(filepath,newFilename)
+        mergedEps.save(mergedFile,overwrite=True)
 
     def jITPC(self,method,freqs,**kwargs):
         # This method calculates single trial phase coherence, according to the jackknife method proposed by Richter et 
