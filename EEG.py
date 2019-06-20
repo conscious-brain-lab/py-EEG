@@ -103,8 +103,18 @@ class EEG(object):
             - ICA (+ selection and removal)
         """
         self.raw.set_montage(mne.channels.read_montage('biosemi64'))
-        self.raw.set_eeg_reference(ref_channels = ['M1','M2'], projection=False)
         self.raw.drop_channels(['ECD','ECU'])
+
+        try:   
+            self.raw.set_eeg_reference(ref_channels = ['M1','M2'], projection=False)
+        except:
+            self.raw.set_eeg_reference(ref_channels = 'average', projection=False)
+
+            
+        self.raw.info['bads'] = self.bad_chans 
+
+        if len(self.raw.info['bads']) > 0:
+            self.raw.interpolate_bads(reset_bads=True) 
 
         if reject_by_annotation:        # Detect and remove blink artefacts
             eog_events = mne.preprocessing.find_eog_events(self.raw)
@@ -119,17 +129,10 @@ class EEG(object):
         picks_eeg = mne.pick_types(self.raw.info, meg=False, eeg=True, eog=True,
                        stim=False)
 
-        self.raw.info['bads'] = self.bad_chans 
-
-        if len(self.raw.info['bads']) > 0:
-            self.raw.interpolate_bads(reset_bads=True) 
-
-        self.events = mne.find_events(self.raw)
-
-        for ev in range(1,self.events.shape[0]): # Remove any events with weirdly short intervals (in the merged data-files, this happens at the "zip"-location)
-            if self.events[ev,0] - self.events[ev-1,0] < 50:
-                self.events[ev,2] = 0
-
+        self.events = mne.find_events(self.raw,shortest_event=1)
+        # for ev in range(1,self.events.shape[0]): # Remove any events with weirdly short intervals (in the merged data-files, this happens at the "zip"-location)
+        #     if self.events[ev,0] - self.events[ev-1,0] < 50:
+        #         self.events[ev,2] = 0
         self.epochs = mne.Epochs(self.raw, self.events, event_id=self.event_ids,
              preload=True, tmin = epochTime[0], tmax = epochTime[1], baseline = baseline, 
              picks=picks_eeg, reject_by_annotation=reject_by_annotation)
@@ -140,8 +143,11 @@ class EEG(object):
             bad_idx, scores = ica.find_bads_eog(self.epochs, ch_name = 'VU', threshold=2)
             ica.apply(self.epochs, exclude=bad_idx)
 
-        self.epochFilename = os.path.join(self.baseDir, 'Proc', self.task, self.subject, self.subject + '_' + str(self.index) + '_epo.fif')
-        self.epochs.save(self.eegFilename[:-4]+'_epo.fif')
+        outdir = os.path.join(self.baseDir, 'Proc', self.task, self.subject)
+        if not os.path.isdir(outdir):
+            os.makedirs(outdir) 
+        self.epochFilename = outdir + '/' + self.subject + '_' + str(self.index) + '_epo.fif'
+        self.epochs.save(self.epochFilename)
 
     def erp(self,conds,**kwargs):
         self.conds=conds
@@ -165,7 +171,6 @@ class EEG(object):
                 plt.savefig(fname=os.path.join(self.plotDir,conds[0].split('/')[1] + ' vs. ' + conds[1].split('/')[1] + '_' + self.chan[c] + '.pdf'),format='pdf')          # ax[2,0].set_suptitle('Condition difference')
         
         else:
-            # evokeds = [self.epochs[name].average() for name in (conds)]
             evokeds[0].comment, evokeds[1].comment = conds
 
             colors = 'blue', 'red'
@@ -177,6 +182,7 @@ class EEG(object):
             mins = np.array([np.min(evokeds[i].data) for i in range(len(evokeds))])
             vmax = np.max([abs(maxes), abs(mins)])*1000000
             vmin = -vmax
+
             # plot_evoked_topo(axes=ax[0,0],evoked=evokeds, color=colors, title=title, background_color='w',show=False)
             plotkwargs = dict(ch_type='eeg', time_unit='s',show=False)
             fig,ax = plt.subplots(3,6, figsize = (6,6))
@@ -192,7 +198,6 @@ class EEG(object):
 
     def TFdecomp(self,method,freqs,**kwargs):
         # For now only does Morlet-wavelet + multitaper decomposition
-        # shell()
         # extract possible arguments
         if kwargs.items():
             for argument in ['baseline_lim','baseline_method','lims','fft','itc','average']:
@@ -210,10 +215,9 @@ class EEG(object):
 
         # Number of cycles dependent on frequency-band
         n_cycles = freqs/2.
-        # shell()
+
         # Run tf-decomposition
         if method == 'morlet':
-            shell()
             self.tf = tfr_morlet(self.epochs, freqs, n_cycles = n_cycles,decim=self.decim, use_fft=self.fft, return_itc=self.itc, average = self.average,output=self.output)
         elif method == 'multitaper':
             self.bandwidth = self.bandwidth if self.bandwidth > 2 else 4
@@ -233,6 +237,20 @@ class EEG(object):
         # Since exact event ids are not saved in tfr-epoch file, create separate pd Series with event numbers per tfr-epoch
         self.events = pd.Series(self.epochs.events[:,2])
         self.events.to_csv('/'+'/'.join(self.epochFilename.split('/')[1:-1])+'/'+tf_filename[:-3] + '.csv')
+
+    def concatenateEpochs(self):
+        epochFiles = glob.glob(os.path.join(self.baseDir, 'Proc', self.task, self.subject, self.subject + '*_epo.fif'))                  
+        eps = []
+        for f in epochFiles:
+            eps.append(mne.read_epochs(f, preload=True))
+
+        mergedEps = mne.concatenate_epochs(eps)
+        filepath = '/'.join((f.split('/')[:-1]   ))
+        fileParts = f.split('/')[-1].split('_')         
+        fileParts[1] = 'merged'
+        newFilename = '_'.join((fileParts))
+        mergedFile = os.path.join(filepath,newFilename)
+        mergedEps.save(mergedFile)
 
 
     def jITPC(self,method,freqs,**kwargs):
