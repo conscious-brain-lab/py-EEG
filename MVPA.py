@@ -119,7 +119,6 @@ class MVPA(object):
 				self.epochs = mne.time_frequency.read_tfrs(self.epochFilename)[0]
 				if self.selection != 'ALL':
 					self.epochs.pick_channels(self.chanSel[self.selection])			
-
 				self.epochsClass1 = self.epochs[class1ids]
 				self.epochsClass2 = self.epochs[class2ids]
 
@@ -190,7 +189,6 @@ class MVPA(object):
 
 				cond1Dat = supTrial1Dat		
 				cond2Dat = supTrial2Dat
-
 
 			y = np.hstack([np.zeros(len(cond1Dat),dtype='bool'), np.ones(len(cond2Dat),dtype ='bool')])
 			X = np.concatenate([cond1Dat,cond2Dat])
