@@ -73,12 +73,18 @@ class EEG(object):
                 os.makedirs(self.plotDir) 
 
             try:
+                extension = '.bdf'
                 self.eegFilename = glob.glob(os.path.join(self.baseDir, 'Raw', self.task, self.subject, '*' + self.subject + '*' + str(self.index) + '*.bdf'))[-1]
                 self.raw =  mne.io.read_raw_edf(self.eegFilename, eog = ['HL','HR','VU','VD'],
                     misc = ['M1','M2'], preload=True)
             except:
-                print("RAW FILE NOT FOUND")
-                pass
+                try:
+                    extension = '.raw.fif'
+                    self.eegFilename = glob.glob(os.path.join(self.baseDir, 'Raw', self.task, self.subject, '*' + self.subject + '*' + str(self.index) + '*.fif'))[-1]
+                    self.raw =  mne.io.read_raw_fif(self.eegFilename, eog = ['HL','HR','VU','VD'],
+                        misc = ['M1','M2'], preload=True)
+                except:
+                    print("RAW FILE NOT FOUND")
 
             try:
                 self.epochFilename = glob.glob(os.path.join(self.baseDir, 'Proc', self.task, self.subject, '*' + self.subject + '*' + str(self.index) + '*_epo.fif'))[-1]                    
@@ -199,6 +205,7 @@ class EEG(object):
     def TFdecomp(self,method,freqs,**kwargs):
         # For now only does Morlet-wavelet + multitaper decomposition
         # extract possible arguments
+        # pass
         if kwargs.items():
             for argument in ['baseline_lim','baseline_method','lims','fft','itc','average']:
                 value = kwargs.pop(argument, False)
@@ -236,7 +243,7 @@ class EEG(object):
 
         # Since exact event ids are not saved in tfr-epoch file, create separate pd Series with event numbers per tfr-epoch
         self.events = pd.Series(self.epochs.events[:,2])
-        self.events.to_csv('/'+'/'.join(self.epochFilename.split('/')[1:-1])+'/'+tf_filename[:-3] + '.csv')
+        self.events.to_csv('/'+'/'.join(self.epochFilename.split('/')[1:-1])+'/'+tf_filename[:-3] + '.csv',header=False)
 
     def concatenateEpochs(self):
         epochFiles = glob.glob(os.path.join(self.baseDir, 'Proc', self.task, self.subject, self.subject + '*_epo.fif'))                  
