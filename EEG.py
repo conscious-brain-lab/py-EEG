@@ -109,8 +109,10 @@ class EEG(object):
             - ICA (+ selection and removal)
         """
         self.raw.set_montage(mne.channels.read_montage('biosemi64'))
-        self.raw.drop_channels(['ECD','ECU'])
-
+        if 'ECD' in self.raw.ch_names:
+            self.raw.drop_channels(['ECD','ECU'])
+        elif 'EXG7' in self.raw.ch_names:
+            self.raw.drop_channels(['EXG7','EXG8'])
         try:   
             self.raw.set_eeg_reference(ref_channels = ['M1','M2'], projection=False)
         except:
